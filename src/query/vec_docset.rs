@@ -86,5 +86,16 @@ pub(crate) mod tests {
             assert_eq!(buffer[i as usize], i + 1 + COLLECT_BLOCK_BUFFER_LEN as u32);
         }
         assert_eq!(postings.fill_buffer(&mut buffer), 9);
+
+        let mut empty = VecDocSet::from(Vec::new());
+        assert_eq!(empty.fill_buffer(&mut buffer), 0);
+
+        let doc_ids: Vec<DocId> = (0..COLLECT_BLOCK_BUFFER_LEN as u32).collect();
+        let mut exact_buffer_len = VecDocSet::from(doc_ids);
+        assert_eq!(
+            exact_buffer_len.fill_buffer(&mut buffer),
+            COLLECT_BLOCK_BUFFER_LEN
+        );
+        assert_eq!(exact_buffer_len.fill_buffer(&mut buffer), 0);
     }
 }

@@ -1,7 +1,7 @@
 use binggan::{BenchRunner, black_box};
 use rand::rng;
 use rand::seq::IteratorRandom;
-use tantivy_common::{BitSet, TinySet, serialize_vint_u32};
+use tantivy_common::{BitSet, TinySet, VInt, read_u32_vint, serialize_vint_u32};
 
 fn bench_vint() {
     let mut runner = BenchRunner::new();
@@ -24,6 +24,33 @@ fn bench_vint() {
             let mut buf = [0u8; 8];
             serialize_vint_u32(val, &mut buf);
             out += u64::from(buf[0]);
+        }
+        black_box(out);
+    });
+
+    let encoded: Vec<[u8; 8]> = (0..100_000u32)
+        .map(|val| {
+            let mut buf = [0u8; 8];
+            serialize_vint_u32(val, &mut buf);
+            buf
+        })
+        .collect();
+    runner.bench_function("bench_vint_decode", move |_| {
+        let mut out = 0u64;
+        for buf in &encoded {
+            let mut data = &buf[..];
+            out += u64::from(read_u32_vint(&mut data));
+        }
+        black_box(out);
+    });
+
+    let vals: Vec<u64> = (0..100_000u64).collect();
+    runner.bench_function("bench_vint64_encode", move |_| {
+        let mut out = 0u64;
+        for &val in &vals {
+            let mut buf = [0u8; 10];
+            let len = VInt(val).serialize_into(&mut buf);
+            out += len as u64 + u64::from(buf[0]);
         }
         black_box(out);
     });

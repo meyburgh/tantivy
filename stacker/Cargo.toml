@@ -18,6 +18,11 @@ harness = false
 name = "bench"
 path = "benches/bench.rs"
 
+[[bench]]
+harness = false
+name = "read_to_end"
+path = "benches/read_to_end.rs"
+
 [[example]]
 name = "hashmap"
 path = "example/hashmap.rs"

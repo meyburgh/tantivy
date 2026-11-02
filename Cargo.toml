@@ -243,3 +243,19 @@ harness = false
 [[bench]]
 name = "intersection_bench"
 harness = false
+
+[[bench]]
+name = "all_scorer"
+harness = false
+
+[[bench]]
+name = "bitset_docset"
+harness = false
+
+[[bench]]
+name = "filter_collector"
+harness = false
+
+[[bench]]
+name = "bytes_filter_collector"
+harness = false

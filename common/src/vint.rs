@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use super::BinarySerializable;
 
 /// Variable int serializes a u128 number
+#[inline]
 pub fn serialize_vint_u128(mut val: u128, output: &mut Vec<u8>) {
     loop {
         let next_byte: u8 = (val % 128u128) as u8;
@@ -111,24 +112,6 @@ pub fn serialize_vint_u32(val: u32, buf: &mut [u8; 8]) -> &[u8] {
     &buf[0..num_bytes]
 }
 
-/// Returns the number of bytes covered by a
-/// serialized vint `u32`.
-///
-/// Expects a buffer data that starts
-/// by the serialized `vint`, scans at most 5 bytes ahead until
-/// it finds the vint final byte.
-///
-/// # May Panic
-/// If the payload does not start by a valid `vint`
-fn vint_len(data: &[u8]) -> usize {
-    for (i, &val) in data.iter().enumerate().take(5) {
-        if val >= STOP_BIT {
-            return i + 1;
-        }
-    }
-    panic!("Corrupted data. Invalid VInt 32");
-}
-
 /// Reads a vint `u32` from a buffer, and
 /// consumes its payload data.
 ///
@@ -136,21 +119,25 @@ fn vint_len(data: &[u8]) -> usize {
 ///
 /// If the buffer does not start by a valid
 /// vint payload
+#[inline]
 pub fn read_u32_vint(data: &mut &[u8]) -> u32 {
     let (result, vlen) = read_u32_vint_no_advance(data);
     *data = &data[vlen..];
     result
 }
 
+#[inline]
 pub fn read_u32_vint_no_advance(data: &[u8]) -> (u32, usize) {
-    let vlen = vint_len(data);
     let mut result = 0u32;
     let mut shift = 0u64;
-    for &b in &data[..vlen] {
+    for (i, &b) in data.iter().enumerate().take(5) {
         result |= u32::from(b & 127u8) << shift;
+        if b >= STOP_BIT {
+            return (result, i + 1);
+        }
         shift += 7;
     }
-    (result, vlen)
+    panic!("Corrupted data. Invalid VInt 32");
 }
 /// Write a `u32` as a vint payload.
 pub fn write_u32_vint<W: io::Write + ?Sized>(val: u32, writer: &mut W) -> io::Result<()> {
@@ -160,6 +147,7 @@ pub fn write_u32_vint<W: io::Write + ?Sized>(val: u32, writer: &mut W) -> io::Re
 }
 
 impl VInt {
+    #[inline]
     pub fn val(&self) -> u64 {
         self.0
     }
@@ -168,12 +156,14 @@ impl VInt {
         VInt::deserialize(reader).map(|vint| vint.0)
     }
 
+    #[inline]
     pub fn serialize_into_vec(&self, output: &mut Vec<u8>) {
         let mut buffer = [0u8; 10];
         let num_bytes = self.serialize_into(&mut buffer);
         output.extend(&buffer[0..num_bytes]);
     }
 
+    #[inline]
     pub fn serialize_into(&self, buffer: &mut [u8; 10]) -> usize {
         let mut remaining = self.0;
         for (i, b) in buffer.iter_mut().enumerate() {
@@ -226,7 +216,9 @@ impl BinarySerializable for VInt {
 #[cfg(test)]
 mod tests {
 
-    use super::{BinarySerializable, VInt, serialize_vint_u32};
+    use super::{
+        BinarySerializable, VInt, read_u32_vint, read_u32_vint_no_advance, serialize_vint_u32,
+    };
 
     fn aux_test_vint(val: u64) {
         let mut v = [14u8; 10];
@@ -266,6 +258,12 @@ mod tests {
         let len_vint = VInt(val as u64).serialize_into(&mut buffer);
         let res2 = serialize_vint_u32(val, &mut buffer2);
         assert_eq!(&buffer[..len_vint], res2, "array wrong for {val}");
+        let (decoded, decoded_len) = read_u32_vint_no_advance(res2);
+        assert_eq!(decoded, val);
+        assert_eq!(decoded_len, res2.len());
+        let mut remaining = res2;
+        assert_eq!(read_u32_vint(&mut remaining), val);
+        assert!(remaining.is_empty());
     }
 
     #[test]
@@ -280,5 +278,17 @@ mod tests {
             aux_test_serialize_vint_u32(power_of_128 + 1u32);
         }
         aux_test_serialize_vint_u32(u32::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "Corrupted data. Invalid VInt 32")]
+    fn test_vint_u32_truncated() {
+        read_u32_vint_no_advance(&[0, 0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Corrupted data. Invalid VInt 32")]
+    fn test_vint_u32_overlong() {
+        read_u32_vint_no_advance(&[0, 0, 0, 0, 0, 128]);
     }
 }

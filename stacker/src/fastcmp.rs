@@ -54,6 +54,9 @@ pub fn fast_nbyte_slice_compare<const SIZE: usize>(left: &[u8], right: &[u8]) ->
             break;
         }
     }
+    if last == left.len() {
+        return true;
+    }
     unsafe { left.get_unchecked(left.len() - SIZE..) == right.get_unchecked(right.len() - SIZE..) }
 }
 
@@ -106,6 +109,18 @@ mod tests {
 
         assert!(fast_short_slice_compare(a, b));
         assert!(!fast_short_slice_compare(a, c));
+    }
+
+    #[test]
+    fn test_slice_compare_bytes_len_32() {
+        let a = [7u8; 32];
+        let mut c = a;
+        c[31] = 8;
+        assert!(fast_nbyte_slice_compare::<16>(&a, &a));
+        assert!(!fast_nbyte_slice_compare::<16>(&a, &c));
+        c[31] = 7;
+        c[16] = 8;
+        assert!(!fast_nbyte_slice_compare::<16>(&a, &c));
     }
 
     #[test]

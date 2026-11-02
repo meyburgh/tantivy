@@ -1,6 +1,6 @@
 use common::{BitSet, TinySet};
 
-use crate::docset::{DocSet, TERMINATED};
+use crate::docset::{DocSet, BLOCK_NUM_TINYBITSETS, BLOCK_WINDOW, TERMINATED};
 use crate::DocId;
 
 /// A `BitSetDocSet` makes it possible to iterate through a bitset as if it was a `DocSet`.
@@ -17,6 +17,7 @@ pub struct BitSetDocSet {
     cursor_bucket: u32, //< index associated with the current tiny bitset
     cursor_tinybitset: TinySet,
     doc: u32,
+    use_dense_fill: bool,
 }
 
 impl BitSetDocSet {
@@ -24,10 +25,78 @@ impl BitSetDocSet {
         self.cursor_bucket = bucket_addr;
         self.cursor_tinybitset = self.docs.tinyset(bucket_addr);
     }
+
+    #[cold]
+    #[inline(never)]
+    fn fill_bitset_block_dense(
+        &mut self,
+        min_doc: DocId,
+        mask: &mut [TinySet; BLOCK_NUM_TINYBITSETS],
+    ) -> DocId {
+        self.seek(min_doc);
+        let horizon = min_doc + BLOCK_WINDOW;
+        if self.doc == TERMINATED || self.doc >= horizon {
+            return self.doc;
+        }
+
+        let delta = self.doc - min_doc;
+        mask[(delta / 64) as usize].insert_mut(delta % 64);
+        let shift = min_doc % 64;
+        let min_bucket = min_doc / 64;
+
+        loop {
+            if self.cursor_tinybitset.is_empty() {
+                let Some(cursor_bucket) = self.docs.first_non_empty_bucket(self.cursor_bucket + 1)
+                else {
+                    self.doc = TERMINATED;
+                    return TERMINATED;
+                };
+                self.go_to_bucket(cursor_bucket);
+            }
+
+            let bucket_base = self.cursor_bucket * 64;
+            if bucket_base >= horizon {
+                let lower = self.cursor_tinybitset.pop_lowest().unwrap();
+                self.doc = bucket_base | lower;
+                return self.doc;
+            }
+
+            let remaining = self.cursor_tinybitset;
+            let visible = if bucket_base + 64 > horizon {
+                remaining.intersect(TinySet::range_lower(horizon % 64))
+            } else {
+                remaining
+            };
+            let bucket = (self.cursor_bucket - min_bucket) as usize;
+            let visible_bits = u64::from_le_bytes(visible.into_bytes());
+            let upper_bits = visible_bits >> shift;
+            if upper_bits != 0 {
+                mask[bucket] = mask[bucket].union(TinySet::deserialize(upper_bits.to_le_bytes()));
+            }
+            if shift != 0 && bucket > 0 {
+                let lower_bits = visible_bits << (64 - shift);
+                if lower_bits != 0 {
+                    mask[bucket - 1] =
+                        mask[bucket - 1].union(TinySet::deserialize(lower_bits.to_le_bytes()));
+                }
+            }
+
+            if visible != remaining {
+                let remaining_bits = u64::from_le_bytes(remaining.into_bytes());
+                let beyond_bits = remaining_bits & !visible_bits;
+                self.cursor_tinybitset = TinySet::deserialize(beyond_bits.to_le_bytes());
+                let lower = self.cursor_tinybitset.pop_lowest().unwrap();
+                self.doc = bucket_base | lower;
+                return self.doc;
+            }
+            self.cursor_tinybitset = TinySet::EMPTY;
+        }
+    }
 }
 
 impl From<BitSet> for BitSetDocSet {
     fn from(docs: BitSet) -> BitSetDocSet {
+        let use_dense_fill = (docs.len() as u64).saturating_mul(32) >= u64::from(docs.max_value());
         let first_tiny_bitset = if docs.max_value() == 0 {
             TinySet::empty()
         } else {
@@ -38,6 +107,7 @@ impl From<BitSet> for BitSetDocSet {
             cursor_bucket: 0,
             cursor_tinybitset: first_tiny_bitset,
             doc: 0u32,
+            use_dense_fill,
         };
         docset.advance();
         docset
@@ -70,15 +140,38 @@ impl DocSet for BitSetDocSet {
         let target_bucket = target / 64u32;
         if target_bucket > self.cursor_bucket {
             self.go_to_bucket(target_bucket);
-            let greater_filter: TinySet = TinySet::range_greater_or_equal(target);
+        }
+        if self.doc < target {
+            let greater_filter = TinySet::range_greater_or_equal(target);
             self.cursor_tinybitset = self.cursor_tinybitset.intersect(greater_filter);
             self.advance()
         } else {
-            let mut doc = self.doc();
-            while doc < target {
-                doc = self.advance();
+            self.doc
+        }
+    }
+
+    #[inline]
+    fn fill_bitset_block(
+        &mut self,
+        min_doc: DocId,
+        mask: &mut [TinySet; BLOCK_NUM_TINYBITSETS],
+    ) -> DocId {
+        if self.use_dense_fill {
+            return self.fill_bitset_block_dense(min_doc, mask);
+        }
+
+        self.seek(min_doc);
+        let horizon = min_doc + BLOCK_WINDOW;
+        loop {
+            let doc = self.doc();
+            if doc >= horizon {
+                return doc;
             }
-            doc
+            let delta = doc - min_doc;
+            mask[(delta / 64) as usize].insert_mut(delta % 64);
+            if self.advance() == TERMINATED {
+                return TERMINATED;
+            }
         }
     }
 
@@ -97,10 +190,11 @@ impl DocSet for BitSetDocSet {
 mod tests {
     use std::collections::BTreeSet;
 
-    use common::BitSet;
+    use common::{BitSet, TinySet};
 
     use super::BitSetDocSet;
-    use crate::docset::{DocSet, TERMINATED};
+    use crate::docset::{DocSet, BLOCK_NUM_TINYBITSETS, TERMINATED};
+    use crate::query::VecDocSet;
     use crate::tests::generate_nonunique_unsorted;
     use crate::DocId;
 
@@ -228,6 +322,74 @@ mod tests {
             assert_eq!(docset.advance(), 6666);
             assert_eq!(docset.doc(), 6666);
             assert_eq!(docset.advance(), TERMINATED);
+        }
+    }
+
+    fn assert_fill_bitset_block(docs: &[DocId], max_doc: DocId, min_doc: DocId) {
+        let mut bitset_docset = create_docbitset(docs, max_doc);
+        let mut vec_docset = VecDocSet::from(docs.to_vec());
+        let mut initial_mask = [TinySet::EMPTY; BLOCK_NUM_TINYBITSETS];
+        initial_mask[0].insert_mut(0);
+        initial_mask[BLOCK_NUM_TINYBITSETS - 1].insert_mut(63);
+        let mut actual_mask = initial_mask;
+        let mut expected_mask = initial_mask;
+
+        let actual_next = bitset_docset.fill_bitset_block(min_doc, &mut actual_mask);
+        let expected_next = vec_docset.fill_bitset_block(min_doc, &mut expected_mask);
+        assert_eq!(actual_mask, expected_mask);
+        assert_eq!(actual_next, expected_next);
+        assert_eq!(bitset_docset.doc(), vec_docset.doc());
+    }
+
+    #[test]
+    fn test_fill_bitset_block() {
+        for max_doc in [1, 17, 63, 64, 65, 100, 1023, 1024, 1025, 1100, 2048] {
+            let dense: Vec<DocId> = (0..max_doc).collect();
+            let sparse: Vec<DocId> = (0..max_doc).step_by(3).collect();
+            let very_sparse: Vec<DocId> = (0..max_doc).step_by(100).collect();
+            for docs in [dense, sparse, very_sparse] {
+                for min_doc in [0, 1, 17, 63, 64, 65, 100, 1023, 1024, 1025, 1100] {
+                    assert_fill_bitset_block(&docs, max_doc, min_doc);
+                }
+            }
+        }
+
+        for step in [1, 3, 100] {
+            let docs: Vec<DocId> = (0..2_500).step_by(step).collect();
+            let mut bitset_docset = create_docbitset(&docs, 2_500);
+            let mut vec_docset = VecDocSet::from(docs);
+            let mut min_doc = 0;
+            loop {
+                let mut actual_mask = [TinySet::EMPTY; BLOCK_NUM_TINYBITSETS];
+                let mut expected_mask = [TinySet::EMPTY; BLOCK_NUM_TINYBITSETS];
+                let actual_next = bitset_docset.fill_bitset_block(min_doc, &mut actual_mask);
+                let expected_next = vec_docset.fill_bitset_block(min_doc, &mut expected_mask);
+                assert_eq!(actual_mask, expected_mask);
+                assert_eq!(actual_next, expected_next);
+                assert_eq!(bitset_docset.doc(), vec_docset.doc());
+                if actual_next == TERMINATED {
+                    break;
+                }
+                min_doc = actual_next;
+            }
+        }
+    }
+
+    #[test]
+    fn test_seek_all_targets() {
+        for max_doc in [1, 63, 64, 65, 130, 1025] {
+            for step in [1, 3, 7, 100] {
+                let docs: Vec<DocId> = (0..max_doc).step_by(step).collect();
+                let mut bitset_docset = create_docbitset(&docs, max_doc);
+                let mut vec_docset = VecDocSet::from(docs);
+                for target in 0..=max_doc {
+                    if target < bitset_docset.doc() {
+                        continue;
+                    }
+                    assert_eq!(bitset_docset.seek(target), vec_docset.seek(target));
+                    assert_eq!(bitset_docset.doc(), vec_docset.doc());
+                }
+            }
         }
     }
 }

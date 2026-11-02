@@ -65,7 +65,15 @@ impl Set<u16> for SparseBlock<'_> {
     }
 }
 
-impl SparseBlock<'_> {
+impl<'a> SparseBlock<'a> {
+    pub(crate) fn iter_values(self) -> impl Iterator<Item = u16> + 'a {
+        self.0
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&bytes| u16::from_le_bytes(bytes))
+    }
+
     #[inline]
     fn num_vals(&self) -> u16 {
         (self.0.len() / 2) as u16

@@ -1,5 +1,5 @@
 use std::ops::{Deref, Range};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::{fmt, io};
 
 pub use stable_deref_trait::StableDeref;
@@ -17,7 +17,8 @@ pub struct OwnedBytes {
 impl OwnedBytes {
     /// Creates an empty `OwnedBytes`.
     pub fn empty() -> OwnedBytes {
-        OwnedBytes::new(&[][..])
+        static EMPTY: OnceLock<OwnedBytes> = OnceLock::new();
+        EMPTY.get_or_init(|| OwnedBytes::new(&[][..])).clone()
     }
 
     /// Creates an `OwnedBytes` instance given a `StableDeref` object.
@@ -221,7 +222,7 @@ impl io::Read for OwnedBytes {
     }
     #[inline]
     fn read_to_end(&mut self, buf: &mut Vec<u8>) -> io::Result<usize> {
-        buf.extend(self.data);
+        buf.extend_from_slice(self.data);
         let read_len = self.data.len();
         self.data = &[];
         Ok(read_len)
@@ -244,6 +245,16 @@ mod tests {
     use std::io::{self, Read};
 
     use super::OwnedBytes;
+
+    #[test]
+    fn test_empty_owned_bytes_share_allocation() {
+        let first = OwnedBytes::empty();
+        let second = OwnedBytes::empty();
+        assert!(std::sync::Arc::ptr_eq(
+            &first.box_stable_deref,
+            &second.box_stable_deref
+        ));
+    }
 
     #[test]
     fn test_owned_bytes_debug() {

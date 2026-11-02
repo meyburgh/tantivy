@@ -216,8 +216,7 @@ impl FileSlice {
 
     /// Creates an empty FileSlice
     pub fn empty() -> FileSlice {
-        const EMPTY_SLICE: &[u8] = &[];
-        FileSlice::from(EMPTY_SLICE)
+        FileSlice::new(Arc::new(OwnedBytes::empty()))
     }
 
     /// Returns a `OwnedBytes` with all of the data in the `FileSlice`.

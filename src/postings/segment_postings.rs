@@ -1,6 +1,6 @@
-use common::HasLen;
+use common::{HasLen, TinySet};
 
-use crate::docset::DocSet;
+use crate::docset::{DocSet, BLOCK_NUM_TINYBITSETS, BLOCK_WINDOW};
 use crate::fastfield::AliveBitSet;
 use crate::positions::PositionReader;
 use crate::postings::compression::COMPRESSION_BLOCK_SIZE;
@@ -190,6 +190,30 @@ impl DocSet for SegmentPostings {
         doc
     }
 
+    fn fill_bitset_block(
+        &mut self,
+        min_doc: DocId,
+        mask: &mut [TinySet; BLOCK_NUM_TINYBITSETS],
+    ) -> DocId {
+        self.seek(min_doc);
+        let horizon = min_doc + BLOCK_WINDOW;
+        let mut cur = self.cur;
+        loop {
+            let doc = self.block_cursor.doc(cur);
+            if doc >= horizon {
+                self.cur = cur;
+                return doc;
+            }
+            let delta = doc - min_doc;
+            mask[(delta / 64) as usize].insert_mut(delta % 64);
+            cur += 1;
+            if cur == COMPRESSION_BLOCK_SIZE {
+                cur = 0;
+                self.block_cursor.advance();
+            }
+        }
+    }
+
     /// Return the current document's `DocId`.
     #[inline]
     fn doc(&self) -> DocId {
@@ -257,12 +281,13 @@ impl Postings for SegmentPostings {
 #[cfg(test)]
 mod tests {
 
-    use common::HasLen;
+    use common::{HasLen, TinySet};
 
     use super::SegmentPostings;
-    use crate::docset::{DocSet, TERMINATED};
+    use crate::docset::{DocSet, BLOCK_NUM_TINYBITSETS, COLLECT_BLOCK_BUFFER_LEN, TERMINATED};
     use crate::fastfield::AliveBitSet;
     use crate::postings::postings::Postings;
+    use crate::query::VecDocSet;
 
     #[test]
     fn test_empty_segment_postings() {
@@ -294,5 +319,58 @@ mod tests {
         let all_deleted =
             AliveBitSet::for_test_from_deleted_docs(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], 12);
         assert_eq!(docs.doc_freq_given_deletes(&all_deleted), 0);
+    }
+
+    #[test]
+    fn test_fill_bitset_block() {
+        let docs: Vec<u32> = (0..2_500).step_by(3).collect();
+        for min_doc in [0, 1, 63, 64, 65, 127, 128, 1_000, 2_000, 2_500] {
+            let mut postings = SegmentPostings::create_from_docs(&docs);
+            let mut vec_docset = VecDocSet::from(docs.clone());
+            let mut actual_mask = [TinySet::EMPTY; BLOCK_NUM_TINYBITSETS];
+            let mut expected_mask = [TinySet::EMPTY; BLOCK_NUM_TINYBITSETS];
+            let actual_next = postings.fill_bitset_block(min_doc, &mut actual_mask);
+            let expected_next = vec_docset.fill_bitset_block(min_doc, &mut expected_mask);
+            assert_eq!(actual_mask, expected_mask);
+            assert_eq!(actual_next, expected_next);
+            assert_eq!(postings.doc(), vec_docset.doc());
+        }
+
+        let mut postings = SegmentPostings::create_from_docs(&docs);
+        let mut vec_docset = VecDocSet::from(docs);
+        let mut min_doc = 0;
+        loop {
+            let mut actual_mask = [TinySet::EMPTY; BLOCK_NUM_TINYBITSETS];
+            let mut expected_mask = [TinySet::EMPTY; BLOCK_NUM_TINYBITSETS];
+            let actual_next = postings.fill_bitset_block(min_doc, &mut actual_mask);
+            let expected_next = vec_docset.fill_bitset_block(min_doc, &mut expected_mask);
+            assert_eq!(actual_mask, expected_mask);
+            assert_eq!(actual_next, expected_next);
+            assert_eq!(postings.doc(), vec_docset.doc());
+            if actual_next == TERMINATED {
+                break;
+            }
+            min_doc = actual_next;
+        }
+    }
+
+    #[test]
+    fn test_fill_buffer() {
+        let docs: Vec<u32> = (0..2_500).step_by(3).collect();
+        let mut postings = SegmentPostings::create_from_docs(&docs);
+        let mut vec_docset = VecDocSet::from(docs);
+        let mut actual_buffer = [0u32; COLLECT_BLOCK_BUFFER_LEN];
+        let mut expected_buffer = [0u32; COLLECT_BLOCK_BUFFER_LEN];
+        loop {
+            let actual_len = postings.fill_buffer(&mut actual_buffer);
+            let expected_len = vec_docset.fill_buffer(&mut expected_buffer);
+            assert_eq!(actual_len, expected_len);
+            assert_eq!(actual_buffer, expected_buffer);
+            assert_eq!(postings.doc(), vec_docset.doc());
+            if actual_len < COLLECT_BLOCK_BUFFER_LEN {
+                break;
+            }
+        }
+        assert_eq!(postings.fill_buffer(&mut actual_buffer), 0);
     }
 }

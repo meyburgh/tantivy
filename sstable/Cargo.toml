@@ -35,3 +35,7 @@ harness = false
 name = "ord_to_term"
 harness = false
 
+[[bench]]
+name = "value_readers"
+harness = false
+

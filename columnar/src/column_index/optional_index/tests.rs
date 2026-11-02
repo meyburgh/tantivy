@@ -51,6 +51,15 @@ fn test_next_non_null_doc_across_sparse_and_dense_blocks() {
     assert_eq!(index.next_non_null_doc(ELEMENTS_PER_BLOCK + 6_000), None);
 }
 
+#[test]
+fn test_next_non_null_doc_dense_gaps() {
+    let row_ids: Vec<RowId> = (0..60_000).step_by(6).collect();
+    let index = OptionalIndex::for_test(60_001, &row_ids);
+    for row_id in row_ids.iter().skip(1) {
+        assert_eq!(index.next_non_null_doc(row_id - 1), Some(*row_id));
+    }
+}
+
 fn random_bitvec() -> BoxedStrategy<Vec<bool>> {
     prop_oneof![
         1 => prop::collection::vec(proptest::bool::weighted(1.0), 0..100),
@@ -330,6 +339,20 @@ fn test_optional_index_iter_dense_block() {
     block.push(3u32);
     block.extend((0..ELEMENTS_PER_BLOCK).map(|i| i + ELEMENTS_PER_BLOCK + 1));
     test_optional_index_iter_aux(&block, 3 * ELEMENTS_PER_BLOCK);
+}
+
+#[test]
+fn test_select_batch() {
+    let optional_index = OptionalIndex::for_test(101, &[1, 3, 100]);
+    let mut ranks = [0, 0, 1, 2, 2];
+    optional_index.select_batch(&mut ranks);
+    assert_eq!(ranks, [1, 1, 3, 100, 100]);
+
+    let row_ids: Vec<RowId> = (0..ELEMENTS_PER_BLOCK).collect();
+    let optional_index = OptionalIndex::for_test(ELEMENTS_PER_BLOCK, &row_ids);
+    let mut ranks: Vec<RowId> = (0..ELEMENTS_PER_BLOCK).collect();
+    optional_index.select_batch(&mut ranks);
+    assert_eq!(ranks, row_ids);
 }
 
 #[test]

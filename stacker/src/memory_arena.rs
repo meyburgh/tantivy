@@ -108,15 +108,18 @@ impl MemoryArena {
     ///
     /// Internally, it counts a number of `1MB` pages
     /// and therefore delivers an upperbound.
+    #[inline]
     pub fn mem_usage(&self) -> usize {
         self.pages.len() * PAGE_SIZE
     }
 
     /// Returns the number of bytes allocated in the arena.
+    #[inline]
     pub fn len(&self) -> usize {
         self.pages.len().saturating_sub(1) * PAGE_SIZE + self.pages.last().unwrap().len
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

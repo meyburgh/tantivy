@@ -83,10 +83,10 @@ impl BlockCache {
             .as_ref()
             .and_then(|cache| cache.lock().unwrap().get(&pos).cloned())
         {
-            self.cache_hits.fetch_add(1, Ordering::SeqCst);
+            self.cache_hits.fetch_add(1, Ordering::Relaxed);
             return Some(block);
         }
-        self.cache_misses.fetch_add(1, Ordering::SeqCst);
+        self.cache_misses.fetch_add(1, Ordering::Relaxed);
         None
     }
 

@@ -9,7 +9,8 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
-use columnar::{BytesColumn, Column, DynamicColumn, HasAssociatedColumnType};
+use columnar::column_index::Set;
+use columnar::{BytesColumn, Column, ColumnIndex, DynamicColumn, HasAssociatedColumnType};
 
 use crate::collector::{Collector, SegmentCollector};
 use crate::schema::Schema;
@@ -159,6 +160,14 @@ where
     #[inline]
     fn accept_document(&self, doc_id: DocId) -> bool {
         if let Some(column) = &self.column_opt {
+            if matches!(&column.index, ColumnIndex::Full) {
+                return (self.predicate)(column.values.get_val(doc_id));
+            }
+            if let ColumnIndex::Optional(optional_index) = &column.index {
+                return optional_index.rank_if_exists(doc_id).is_some_and(|row_id| {
+                    (self.predicate)(column.values.get_val(row_id))
+                });
+            }
             for val in column.values_for_doc(doc_id) {
                 if (self.predicate)(val) {
                     return true;
@@ -334,6 +343,23 @@ where
     #[inline]
     fn accept_document(&mut self, doc_id: DocId) -> bool {
         if let Some(column) = &self.column_opt {
+            match &column.ords().index {
+                ColumnIndex::Full => {
+                    self.buffer.clear();
+                    return column.ord_to_bytes(doc_id as u64, &mut self.buffer).unwrap_or(false)
+                        && (self.predicate)(&self.buffer);
+                }
+                ColumnIndex::Optional(optional_index) => {
+                    let Some(row_id) = optional_index.rank_if_exists(doc_id) else {
+                        return false;
+                    };
+                    let ord = column.ords().values.get_val(row_id);
+                    self.buffer.clear();
+                    return column.ord_to_bytes(ord, &mut self.buffer).unwrap_or(false)
+                        && (self.predicate)(&self.buffer);
+                }
+                _ => {}
+            }
             for ord in column.term_ords(doc_id) {
                 self.buffer.clear();
 
@@ -378,5 +404,91 @@ where
 
     fn harvest(self) -> TSegmentCollector::Fruit {
         self.segment_collector.harvest()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BytesFilterCollector, FilterCollector};
+    use crate::collector::Count;
+    use crate::query::AllQuery;
+    use crate::schema::{Schema, FAST};
+    use crate::{Index, TantivyDocument};
+
+    fn count_matching(values: &[Option<u64>], threshold: u64) -> usize {
+        let mut schema_builder = Schema::builder();
+        let value_field = schema_builder.add_u64_field("value", FAST);
+        let index = Index::create_in_ram(schema_builder.build());
+        let mut writer = index.writer_for_tests().unwrap();
+        for &value in values {
+            let mut document = TantivyDocument::default();
+            if let Some(value) = value {
+                document.add_u64(value_field, value);
+            }
+            writer.add_document(document).unwrap();
+        }
+        writer.commit().unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let collector = FilterCollector::new(
+            "value".to_string(),
+            move |value: u64| value > threshold,
+            Count,
+        );
+        searcher.search(&AllQuery, &collector).unwrap()
+    }
+
+    #[test]
+    fn test_full_column_filter() {
+        assert_eq!(count_matching(&[Some(1), Some(2), Some(3)], 1), 2);
+        assert_eq!(count_matching(&[Some(1), Some(2), Some(3)], 3), 0);
+    }
+
+    #[test]
+    fn test_optional_column_filter() {
+        assert_eq!(count_matching(&[Some(1), None, Some(3)], 1), 1);
+        assert_eq!(count_matching(&[Some(1), None, Some(3)], 3), 0);
+    }
+
+    fn count_bytes(values: &[Option<&[u8]>], target: &[u8]) -> usize {
+        let mut schema_builder = Schema::builder();
+        let barcode = schema_builder.add_bytes_field("barcode", FAST);
+        let index = Index::create_in_ram(schema_builder.build());
+        let mut writer = index.writer_for_tests().unwrap();
+        for &value in values {
+            let mut document = TantivyDocument::default();
+            if let Some(value) = value {
+                document.add_bytes(barcode, value);
+            }
+            writer.add_document(document).unwrap();
+        }
+        writer.commit().unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let target = target.to_vec();
+        let collector = BytesFilterCollector::new(
+            "barcode".to_string(),
+            move |bytes: &[u8]| bytes == target,
+            Count,
+        );
+        searcher.search(&AllQuery, &collector).unwrap()
+    }
+
+    #[test]
+    fn test_full_bytes_filter() {
+        assert_eq!(count_bytes(&[Some(b"a"), Some(b"bbb"), Some(b"cc")], b"bbb"), 1);
+        assert_eq!(count_bytes(&[Some(b"a"), Some(b"cc")], b"bbb"), 0);
+    }
+
+    #[test]
+    fn test_optional_bytes_filter() {
+        assert_eq!(count_bytes(&[None, Some(b"bbb"), None], b"bbb"), 1);
+        assert_eq!(count_bytes(&[None, Some(b"cc"), None], b"bbb"), 0);
+    }
+
+    #[test]
+    fn test_optional_bytes_ord_mapping() {
+        assert_eq!(
+            count_bytes(&[Some(b"aaa"), Some(b"zzz"), Some(b"mmm")], b"mmm"),
+            1
+        );
     }
 }

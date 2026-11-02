@@ -174,7 +174,7 @@ impl<'a> Set<u16> for DenseBlock<'a> {
     }
 }
 
-impl DenseBlock<'_> {
+impl<'a> DenseBlock<'a> {
     #[inline]
     fn mini_block(&self, mini_block_id: u16) -> DenseMiniBlock {
         let data_start_pos = mini_block_id as usize * MINI_BLOCK_NUM_BYTES;
@@ -183,6 +183,27 @@ impl DenseBlock<'_> {
                 .try_into()
                 .unwrap(),
         )
+    }
+
+    pub(crate) fn iter_values(self) -> impl Iterator<Item = u16> + 'a {
+        self.0
+            .as_chunks::<MINI_BLOCK_NUM_BYTES>()
+            .0
+            .iter()
+            .enumerate()
+            .flat_map(|(block_id, &bytes)| {
+                let mini_block = DenseMiniBlock::from_bytes(bytes);
+                let block_id = block_id as u16;
+                let mut bitvec = mini_block.bitvec;
+                std::iter::from_fn(move || {
+                    if bitvec == 0 {
+                        return None;
+                    }
+                    let offset = bitvec.trailing_zeros() as u16;
+                    bitvec &= bitvec - 1;
+                    Some(block_id * ELEMENTS_PER_MINI_BLOCK + offset)
+                })
+            })
     }
 
     #[inline]

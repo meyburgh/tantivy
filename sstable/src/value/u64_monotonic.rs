@@ -20,6 +20,7 @@ impl ValueReader for U64MonotonicValueReader {
         let original_num_bytes = data.len();
         let num_vals = deserialize_vint_u64(&mut data) as usize;
         self.vals.clear();
+        self.vals.reserve(num_vals);
         let mut prev_val = 0u64;
         for _ in 0..num_vals {
             let delta = deserialize_vint_u64(&mut data);

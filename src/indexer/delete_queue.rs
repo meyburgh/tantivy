@@ -181,16 +181,14 @@ impl DeleteCursor {
     ///   will return `None`.
     /// - the next get will return the first operation with an `opstamp >= target_opstamp`.
     pub fn skip_to(&mut self, target_opstamp: Opstamp) {
-        // TODO Can be optimize as we work with block.
-        while self.is_behind_opstamp(target_opstamp) {
-            self.advance();
+        loop {
+            let num_behind = self.block.operations[self.pos..]
+                .partition_point(|operation| operation.opstamp < target_opstamp);
+            self.pos += num_behind;
+            if self.pos < self.block.operations.len() || !self.load_block_if_required() {
+                break;
+            }
         }
-    }
-
-    fn is_behind_opstamp(&mut self, target_opstamp: Opstamp) -> bool {
-        self.get()
-            .map(|operation| operation.opstamp < target_opstamp)
-            .unwrap_or(false)
     }
 
     /// If the current block has been entirely
@@ -301,5 +299,40 @@ mod tests {
             operations_it.advance();
             assert!(operations_it.get().is_none());
         }
+    }
+
+    #[test]
+    fn test_skip_to() {
+        let delete_queue = DeleteQueue::default();
+        for opstamp in 1..=10 {
+            delete_queue.push(DeleteOperation {
+                opstamp,
+                target: Box::new(DummyWeight),
+            });
+        }
+        let mut cursor = delete_queue.cursor();
+        cursor.skip_to(5);
+        assert_eq!(cursor.get().unwrap().opstamp, 5);
+        cursor.skip_to(5);
+        assert_eq!(cursor.get().unwrap().opstamp, 5);
+        cursor.skip_to(11);
+        assert!(cursor.get().is_none());
+
+        let delete_queue = DeleteQueue::default();
+        for opstamp in 1..=4 {
+            delete_queue.push(DeleteOperation {
+                opstamp,
+                target: Box::new(DummyWeight),
+            });
+        }
+        let mut cursor = delete_queue.cursor();
+        cursor.skip_to(4);
+        assert_eq!(cursor.get().unwrap().opstamp, 4);
+        delete_queue.push(DeleteOperation {
+            opstamp: 11,
+            target: Box::new(DummyWeight),
+        });
+        cursor.skip_to(11);
+        assert_eq!(cursor.get().unwrap().opstamp, 11);
     }
 }

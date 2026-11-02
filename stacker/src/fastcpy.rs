@@ -68,9 +68,9 @@ fn short_copy(src: &[u8], dst: &mut [u8]) {
     debug_assert_eq!(src.len(), dst.len());
     let len = src.len();
 
-    // length 1-3
-    dst[0] = src[0];
-    if len >= 2 {
+    if len == 1 {
+        dst[0] = src[0];
+    } else {
         double_copy_trick::<2>(src, dst);
     }
 }
@@ -80,6 +80,9 @@ fn double_copy_trick<const SIZE: usize>(src: &[u8], dst: &mut [u8]) {
     debug_assert!(src.len() >= SIZE);
     debug_assert!(dst.len() >= SIZE);
     dst[0..SIZE].copy_from_slice(&src[0..SIZE]);
+    if src.len() == SIZE {
+        return;
+    }
     dst[src.len() - SIZE..].copy_from_slice(&src[src.len() - SIZE..]);
 }
 

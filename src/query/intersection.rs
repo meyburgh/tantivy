@@ -322,7 +322,7 @@ impl<TDocSet: DocSet, TOtherDocSet: DocSet> Intersection<TDocSet, TOtherDocSet> 
                 let mut other_mask = EMPTY_BLOCK;
                 next_base = next_base.max(other.fill_bitset_block(base, &mut other_mask));
                 if and_blocks_and_return_is_empty(&mut mask, &other_mask) {
-                    continue;
+                    break;
                 }
             }
 

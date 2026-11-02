@@ -27,6 +27,7 @@ impl Iterator for TinySetIterator {
 impl IntoIterator for TinySet {
     type Item = u32;
     type IntoIter = TinySetIterator;
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         TinySetIterator(self)
     }
@@ -62,6 +63,7 @@ impl TinySet {
         TinySet::empty().complement()
     }
 
+    #[inline]
     pub fn clear(&mut self) {
         self.0 = 0u64;
     }
@@ -180,6 +182,7 @@ impl TinySet {
     /// to limit excluded.
     ///
     /// The limit is assumed to be strictly lower than 64.
+    #[inline]
     pub fn range_lower(upper_bound: u32) -> TinySet {
         TinySet((1u64 << u64::from(upper_bound % 64u32)) - 1u64)
     }
@@ -188,6 +191,7 @@ impl TinySet {
     /// or equal to the given limit, included. (and up to 63)
     ///
     /// The limit is assumed to be strictly lower than 64.
+    #[inline]
     pub fn range_greater_or_equal(from_included: u32) -> TinySet {
         TinySet::range_lower(from_included).complement()
     }
@@ -313,6 +317,7 @@ impl BitSet {
     ///
     /// Reminder: the tiny set with the bucket `bucket`, represents the
     /// elements from `bucket * 64` to `(bucket+1) * 64`.
+    #[inline]
     pub fn first_non_empty_bucket(&self, bucket: u32) -> Option<u32> {
         self.tinysets[bucket as usize..]
             .iter()
@@ -329,6 +334,7 @@ impl BitSet {
     /// Returns the tiny bitset representing the
     /// the set restricted to the number range from
     /// `bucket * 64` to `(bucket + 1) * 64`.
+    #[inline]
     pub fn tinyset(&self, bucket: u32) -> TinySet {
         self.tinysets[bucket as usize]
     }

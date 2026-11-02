@@ -161,6 +161,13 @@ impl ExpUnrolledLinkedList {
             self.tail
         );
 
+        let full_blocks_len = if self.block_num <= 15 {
+            (1usize << self.block_num) - 8
+        } else {
+            (1usize << 15) - 8 + (self.block_num as usize - 15) * (1usize << 15)
+        };
+        output.reserve(full_blocks_len + last_block_len);
+
         // Full Blocks (iterate through all blocks except the last one)
         // Note: Blocks are numbered starting from FIRST_BLOCK_NUM+1 (=3) after first allocation
         for block_num in FIRST_BLOCK_NUM + 1..self.block_num {

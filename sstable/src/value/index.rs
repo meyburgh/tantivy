@@ -20,6 +20,7 @@ impl ValueReader for IndexValueReader {
         let original_num_bytes = data.len();
         let num_vals = deserialize_vint_u64(&mut data) as usize;
         self.vals.clear();
+        self.vals.reserve(num_vals);
         let mut first_ordinal = 0u64;
         let mut prev_start = deserialize_vint_u64(&mut data) as usize;
         for _ in 0..num_vals {

@@ -5,6 +5,7 @@ mod set;
 mod set_block;
 
 use common::{BinarySerializable, OwnedBytes, VInt};
+use itertools::Either;
 pub use set::{SelectCursor, Set, SetCodec};
 use set_block::{
     DENSE_BLOCK_NUM_BYTES, DenseBlock, DenseBlockCodec, SparseBlock, SparseBlockCodec,
@@ -374,15 +375,24 @@ impl OptionalIndex {
     }
 
     pub fn iter_non_null_docs(&self) -> impl Iterator<Item = RowId> + '_ {
-        // TODO optimize. We could iterate over the blocks directly.
-        // We use the dense value ids and retrieve the doc ids via select.
-        let mut select_batch = self.select_cursor();
-        (0..self.num_non_null_docs).map(move |rank| select_batch.select(rank))
+        self.block_metas
+            .iter()
+            .enumerate()
+            .flat_map(|(block_id, block_meta)| {
+                let block_doc_start = block_id as u32 * ELEMENTS_PER_BLOCK;
+                self.block(*block_meta)
+                    .iter_values()
+                    .map(move |in_block_doc| block_doc_start + in_block_doc as u32)
+            })
     }
     pub fn select_batch(&self, ranks: &mut [RowId]) {
-        let mut select_cursor = self.select_cursor();
+        let mut doc_ids = self.iter_non_null_docs().enumerate();
+        let mut current = doc_ids.next();
         for rank in ranks.iter_mut() {
-            *rank = select_cursor.select(*rank);
+            while current.unwrap().0 < *rank as usize {
+                current = doc_ids.next();
+            }
+            *rank = current.unwrap().1;
         }
     }
 
@@ -428,7 +438,15 @@ enum Block<'a> {
     Sparse(SparseBlock<'a>),
 }
 
-impl Block<'_> {
+impl<'a> Block<'a> {
+    #[inline]
+    fn iter_values(self) -> impl Iterator<Item = u16> + 'a {
+        match self {
+            Block::Dense(dense_block) => Either::Left(dense_block.iter_values()),
+            Block::Sparse(sparse_block) => Either::Right(sparse_block.iter_values()),
+        }
+    }
+
     #[inline]
     fn rank_if_exists_batch(
         self,

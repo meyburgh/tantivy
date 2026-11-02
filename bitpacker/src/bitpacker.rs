@@ -260,7 +260,7 @@ impl BitUnpacker {
         // We want the start of the fast track to start align with bytes.
         // A sufficient condition is to start with an idx that is a multiple of 8,
         // so highway start is the closest multiple of 8 that is >= start_idx.
-        let entrance_ramp_len: u32 = 8 - (start_idx % 8) % 8;
+        let entrance_ramp_len: u32 = (8 - (start_idx % 8)) % 8;
 
         let highway_start: u32 = start_idx + entrance_ramp_len;
 

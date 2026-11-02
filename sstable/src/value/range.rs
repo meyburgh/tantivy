@@ -21,6 +21,7 @@ impl ValueReader for RangeValueReader {
         self.vals.clear();
         let original_num_bytes = data.len();
         let len = deserialize_vint_u64(&mut data) as usize;
+        self.vals.reserve(len.saturating_sub(1));
         if len != 0 {
             let mut prev_val = deserialize_vint_u64(&mut data);
             for _ in 1..len {

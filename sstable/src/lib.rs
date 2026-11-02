@@ -73,10 +73,9 @@ const SSTABLE_VERSION: u32 = 3;
 /// the longest common prefix.
 pub(crate) fn common_prefix_len(left: &[u8], right: &[u8]) -> usize {
     left.iter()
-        .cloned()
-        .zip(right.iter().cloned())
-        .take_while(|(left, right)| left == right)
-        .count()
+        .zip(right)
+        .position(|(left, right)| left != right)
+        .unwrap_or(left.len().min(right.len()))
 }
 
 #[derive(Debug, Copy, Clone)]

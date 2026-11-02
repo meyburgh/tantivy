@@ -59,6 +59,15 @@ fn bench_blocked_bitpacker() {
         }
         black_box(out);
     });
+
+    let mut blocked_bitpacker = BlockedBitpacker::new();
+    for val in 0..=21500 {
+        blocked_bitpacker.add(val * val);
+    }
+    runner.bench_function("blockedbitp_iter", move |_| {
+        black_box(blocked_bitpacker.iter().sum::<u64>());
+    });
+
     runner.bench_function("blockedbitp_create", |_| {
         let mut blocked_bitpacker = BlockedBitpacker::new();
         for val in 0..=21500 {

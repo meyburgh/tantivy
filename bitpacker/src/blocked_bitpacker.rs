@@ -138,11 +138,21 @@ impl BlockedBitpacker {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = u64> + '_ {
-        // todo performance: we could decompress a whole block and cache it instead
-        let bitpacked_elems = self.offset_and_bits.len() * BLOCK_SIZE;
-
-        (0..bitpacked_elems)
-            .map(move |idx| self.get(idx))
+        self.offset_and_bits
+            .iter()
+            .flat_map(move |metadata| {
+                let mut values = [0u64; BLOCK_SIZE];
+                BitUnpacker::new(metadata.num_bits()).get_range(
+                    0,
+                    &self.compressed_blocks[metadata.offset() as usize..],
+                    &mut values,
+                );
+                let base_value = metadata.base_value();
+                for value in &mut values {
+                    *value += base_value;
+                }
+                values.into_iter()
+            })
             .chain(self.buffer.iter().cloned())
     }
 }
@@ -173,5 +183,9 @@ mod tests {
         }
         assert_eq!(blocked_bitpacker.iter().count(), 21500);
         assert_eq!(blocked_bitpacker.iter().last().unwrap(), 21499);
+        assert_eq!(
+            blocked_bitpacker.iter().collect::<Vec<_>>(),
+            (0..21500).collect::<Vec<_>>()
+        );
     }
 }
